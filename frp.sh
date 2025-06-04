@@ -1,30 +1,26 @@
 #!/bin/bash
 set -e
 
-# 颜色定义
-
-RED=’\033[0;31m’
-GREEN=’\033[0;32m’
-YELLOW=’\033[1;33m’
-BLUE=’\033[0;34m’
-NC=’\033[0m’
-
 # 全局变量
 
 FRP_VERSION=“0.52.3”
 INSTALL_DIR=”/opt/frp”
 CONFIG_DIR=”/etc/frp”
 
-print_info() { printf “%b[INFO]%b %s\n” “$BLUE” “$NC” “$1”; }
-print_success() { printf “%b[SUCCESS]%b %s\n” “$GREEN” “$NC” “$1”; }
-print_error() { printf “%b[ERROR]%b %s\n” “$RED” “$NC” “$1”; }
+print_info() { echo “[INFO] $1”; }
+print_success() { echo “[SUCCESS] $1”; }
+print_error() { echo “[ERROR] $1”; }
 
 # 检测系统
 
 detect_system() {
-if [ -f /etc/openwrt_release ]; then OS_TYPE=“openwrt”
-elif [ “$(uname)” = “Darwin” ]; then OS_TYPE=“darwin”
-else OS_TYPE=“linux”; fi
+if [ -f /etc/openwrt_release ]; then
+OS_TYPE=“openwrt”
+elif [ “$(uname)” = “Darwin” ]; then
+OS_TYPE=“darwin”
+else
+OS_TYPE=“linux”
+fi
 
 ```
 case $(uname -m) in
@@ -70,13 +66,25 @@ print_success "FRP 安装完成"
 
 setup_server() {
 print_info “配置服务端…”
-read -p “端口 [7000]: “ port; port=${port:-7000}
-read -p “面板端口 [7500]: “ dash_port; dash_port=${dash_port:-7500}
-read -p “用户名 [admin]: “ user; user=${user:-admin}
-read -p “密码: “ pwd
-read -p “Token: “ token
+printf “绑定端口 [7000]: “
+read port
+port=${port:-7000}
 
 ```
+printf "面板端口 [7500]: "
+read dash_port
+dash_port=${dash_port:-7500}
+
+printf "用户名 [admin]: "
+read user
+user=${user:-admin}
+
+printf "密码: "
+read pwd
+
+printf "Token: "
+read token
+
 cat > "$CONFIG_DIR/frps.ini" <<EOF
 ```
 
@@ -105,14 +113,27 @@ print_success "服务端配置完成"
 
 setup_client() {
 print_info “配置客户端…”
-read -p “服务器地址: “ server
-read -p “服务器端口 [7000]: “ port; port=${port:-7000}
-read -p “Token: “ token
-read -p “本地端口: “ local_port
-read -p “远程端口: “ remote_port
-read -p “服务名称 [ssh]: “ name; name=${name:-ssh}
+printf “服务器地址: “
+read server
 
 ```
+printf "服务器端口 [7000]: "
+read port
+port=${port:-7000}
+
+printf "Token: "
+read token
+
+printf "本地端口: "
+read local_port
+
+printf "远程端口: "
+read remote_port
+
+printf "服务名称 [ssh]: "
+read name
+name=${name:-ssh}
+
 cat > "$CONFIG_DIR/frpc.ini" <<EOF
 ```
 
@@ -181,7 +202,8 @@ print_success “$service 服务已启动”
 
 quick_panel() {
 if [ ! -f “$CONFIG_DIR/frps.ini” ]; then
-print_error “未找到服务端配置”; return
+print_error “未找到服务端配置”
+return
 fi
 
 ```
@@ -200,11 +222,26 @@ echo "========================="
 
 # 显示连接信息
 if [ -f "/var/log/frps.log" ]; then
-    echo "最近连接:"
-    tail -10 /var/log/frps.log | grep "login from\|proxy added" | tail -5
+    echo "最近连接的客户端IP:"
+    tail -20 /var/log/frps.log | grep "login from" | tail -5 | while IFS= read -r line; do
+        client_ip=$(echo "$line" | awk '{print $NF}')
+        echo "  $client_ip"
+    done
+    
+    echo ""
+    echo "活跃代理:"
+    tail -20 /var/log/frps.log | grep "proxy added" | tail -5 | while IFS= read -r line; do
+        echo "  $line"
+    done
+    
+    echo ""
+    local bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
+    local connections=$(netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | wc -l)
+    echo "当前连接数: $connections"
     echo "========================="
 fi
-read -p "按回车返回..."
+printf "按回车返回..."
+read dummy
 ```
 
 }
@@ -226,19 +263,40 @@ done
 
 ```
 # 显示连接详情
-if [ -f "/var/log/frps.log" ]; then
+if [ -f "$CONFIG_DIR/frps.ini" ] && [ -f "/var/log/frps.log" ]; then
     echo ""
-    echo "活跃连接:"
+    echo "连接的客户端IP:"
     local bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-    netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | while read line; do
-        echo "  $(echo $line | awk '{print $5}' | cut -d: -f1)"
+    netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | while IFS= read -r line; do
+        client_ip=$(echo "$line" | awk '{print $5}' | cut -d: -f1)
+        echo "  来自: $client_ip"
+    done
+    
+    echo ""
+    echo "最近日志:"
+    tail -5 /var/log/frps.log | while IFS= read -r line; do
+        echo "  $line"
     done
 fi
 
-if [ -f "/var/log/frpc.log" ]; then
+if [ -f "$CONFIG_DIR/frpc.ini" ] && [ -f "/var/log/frpc.log" ]; then
+    echo ""
+    echo "客户端状态:"
+    local server_addr=$(grep server_addr "$CONFIG_DIR/frpc.ini" | cut -d'=' -f2 | tr -d ' ')
+    local server_port=$(grep server_port "$CONFIG_DIR/frpc.ini" | cut -d'=' -f2 | tr -d ' ')
+    echo "  连接到: $server_addr:$server_port"
+    
+    if netstat -tn 2>/dev/null | grep -q "$server_addr:$server_port.*ESTABLISHED"; then
+        echo "  状态: 已连接"
+    else
+        echo "  状态: 未连接"
+    fi
+    
     echo ""
     echo "客户端日志:"
-    tail -3 /var/log/frpc.log
+    tail -3 /var/log/frpc.log | while IFS= read -r line; do
+        echo "  $line"
+    done
 fi
 ```
 
@@ -263,10 +321,23 @@ done
 
 view_logs() {
 echo “1. frps日志  2. frpc日志”
-read -p “选择: “ choice
+printf “选择: “
+read choice
 case $choice in
-1) [ -f /var/log/frps.log ] && tail -f /var/log/frps.log ;;
-2) [ -f /var/log/frpc.log ] && tail -f /var/log/frpc.log ;;
+1)
+if [ -f /var/log/frps.log ]; then
+tail -f /var/log/frps.log
+else
+print_error “frps日志文件不存在”
+fi
+;;
+2)
+if [ -f /var/log/frpc.log ]; then
+tail -f /var/log/frpc.log
+else
+print_error “frpc日志文件不存在”
+fi
+;;
 esac
 }
 
@@ -286,18 +357,19 @@ echo “5. 查看日志”
 echo “f. 快速面板”
 echo “0. 退出”
 echo “===============================”
-read -p “请选择: “ choice
+printf “请选择: “
+read choice
 
 ```
     case $choice in
         1) install_frp && setup_server ;;
         2) install_frp && setup_client ;;
-        3) show_status; read -p "按回车继续..." ;;
-        4) restart_services; read -p "按回车继续..." ;;
+        3) show_status; printf "按回车继续..."; read dummy ;;
+        4) restart_services; printf "按回车继续..."; read dummy ;;
         5) view_logs ;;
         f|F) quick_panel ;;
         0) exit 0 ;;
-        *) print_error "无效选择" ;;
+        *) print_error "无效选择"; sleep 1 ;;
     esac
 done
 ```
