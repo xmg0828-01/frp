@@ -18,21 +18,26 @@ echo “[ERROR] $1”
 }
 
 detect_system() {
-if [ -f /etc/openwrt_release ]; then
+if test -f /etc/openwrt_release; then
 OS_TYPE=“openwrt”
-elif [ “$(uname)” = “Darwin” ]; then
+elif test “$(uname)” = “Darwin”; then
 OS_TYPE=“darwin”
 else
 OS_TYPE=“linux”
 fi
 
 ```
-case "$(uname -m)" in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    armv7l|armv6l) ARCH="arm" ;;
-    *) print_error "不支持的架构"; exit 1 ;;
-esac
+MACHINE=$(uname -m)
+if test "$MACHINE" = "x86_64" || test "$MACHINE" = "amd64"; then
+    ARCH="amd64"
+elif test "$MACHINE" = "aarch64" || test "$MACHINE" = "arm64"; then
+    ARCH="arm64"
+elif test "$MACHINE" = "armv7l" || test "$MACHINE" = "armv6l"; then
+    ARCH="arm"
+else
+    print_error "不支持的架构"
+    exit 1
+fi
 print_success "系统: $OS_TYPE, 架构: $ARCH"
 ```
 
@@ -68,16 +73,22 @@ setup_server() {
 print_info “配置服务端…”
 printf “端口 [7000]: “
 read port
-port=${port:-7000}
+if test -z “$port”; then
+port=“7000”
+fi
 
 ```
 printf "面板端口 [7500]: "
 read dash_port
-dash_port=${dash_port:-7500}
+if test -z "$dash_port"; then
+    dash_port="7500"
+fi
 
 printf "用户名 [admin]: "
 read user
-user=${user:-admin}
+if test -z "$user"; then
+    user="admin"
+fi
 
 printf "密码: "
 read pwd
@@ -118,7 +129,9 @@ read server
 ```
 printf "服务器端口 [7000]: "
 read port
-port=${port:-7000}
+if test -z "$port"; then
+    port="7000"
+fi
 
 printf "Token: "
 read token
@@ -131,7 +144,9 @@ read remote_port
 
 printf "服务名称 [ssh]: "
 read name
-name=${name:-ssh}
+if test -z "$name"; then
+    name="ssh"
+fi
 
 cat > "$CONFIG_DIR/frpc.ini" <<EOF
 ```
@@ -162,7 +177,7 @@ print_success "客户端配置完成"
 
 create_service() {
 service=$1
-if [ “$OS_TYPE” = “openwrt” ]; then
+if test “$OS_TYPE” = “openwrt”; then
 cat > “/etc/init.d/$service” <<EOF
 #!/bin/sh /etc/rc.common
 START=99
@@ -199,7 +214,7 @@ print_success “$service 服务已启动”
 }
 
 quick_panel() {
-if [ ! -f “$CONFIG_DIR/frps.ini” ]; then
+if test ! -f “$CONFIG_DIR/frps.ini”; then
 print_error “未找到服务端配置”
 return
 fi
@@ -219,11 +234,11 @@ echo "用户: $user"
 echo "密码: $pwd"
 echo "========================="
 
-if [ -f "/var/log/frps.log" ]; then
+if test -f "/var/log/frps.log"; then
     echo "最近连接的客户端IP:"
     tail -20 /var/log/frps.log | grep "login from" | tail -5 | while read line; do
         client_ip=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/) print $i}')
-        if [ -n "$client_ip" ]; then
+        if test -n "$client_ip"; then
             echo "  $client_ip"
         fi
     done
@@ -252,9 +267,9 @@ echo “=== FRP 状态 ===”
 
 ```
 for service in frps frpc; do
-    if [ -f "$CONFIG_DIR/$service.ini" ]; then
+    if test -f "$CONFIG_DIR/$service.ini"; then
         printf "$service: "
-        if [ "$OS_TYPE" = "openwrt" ]; then
+        if test "$OS_TYPE" = "openwrt"; then
             if pgrep -f "$service" >/dev/null; then
                 echo "运行中"
             else
@@ -270,7 +285,7 @@ for service in frps frpc; do
     fi
 done
 
-if [ -f "/var/log/frps.log" ]; then
+if test -f "/var/log/frps.log"; then
     echo ""
     echo "当前连接的客户端IP:"
     bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
@@ -285,7 +300,7 @@ if [ -f "/var/log/frps.log" ]; then
     echo "  连接次数: $count"
 fi
 
-if [ -f "/var/log/frpc.log" ]; then
+if test -f "/var/log/frpc.log"; then
     echo ""
     echo "客户端状态:"
     tail -3 /var/log/frpc.log
@@ -296,8 +311,8 @@ fi
 
 restart_services() {
 for service in frps frpc; do
-if [ -f “$CONFIG_DIR/$service.ini” ]; then
-if [ “$OS_TYPE” = “openwrt” ]; then
+if test -f “$CONFIG_DIR/$service.ini”; then
+if test “$OS_TYPE” = “openwrt”; then
 “/etc/init.d/$service” restart
 else
 systemctl restart “$service”
@@ -311,30 +326,27 @@ view_logs() {
 echo “1. frps日志  2. frpc日志”
 printf “选择: “
 read choice
-case $choice in
-1)
-if [ -f /var/log/frps.log ]; then
+if test “$choice” = “1”; then
+if test -f /var/log/frps.log; then
 tail -f /var/log/frps.log
 else
 echo “日志文件不存在”
 fi
-;;
-2)
-if [ -f /var/log/frpc.log ]; then
+elif test “$choice” = “2”; then
+if test -f /var/log/frpc.log; then
 tail -f /var/log/frpc.log
 else
 echo “日志文件不存在”
 fi
-;;
-esac
+fi
 }
 
 uninstall_frp() {
 printf “确定要卸载 FRP 吗? (yes/no): “
 read confirm
-if [ “$confirm” = “yes” ]; then
+if test “$confirm” = “yes”; then
 for service in frps frpc; do
-if [ “$OS_TYPE” = “openwrt” ]; then
+if test “$OS_TYPE” = “openwrt”; then
 “/etc/init.d/$service” stop 2>/dev/null || true
 rm -f “/etc/init.d/$service”
 else
@@ -348,7 +360,7 @@ done
     rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
     rm -f /var/log/frp*.log
     
-    if [ "$OS_TYPE" != "openwrt" ]; then
+    if test "$OS_TYPE" != "openwrt"; then
         systemctl daemon-reload
     fi
     
@@ -358,7 +370,7 @@ fi
 
 }
 
-do_main_menu() {
+main_loop() {
 while true; do
 clear
 echo “===============================”
@@ -377,51 +389,41 @@ printf “请选择: “
 read choice
 
 ```
-    case $choice in
-        1)
-            install_frp
-            setup_server
-            printf "按回车继续..."
-            read dummy
-            ;;
-        2)
-            install_frp
-            setup_client
-            printf "按回车继续..."
-            read dummy
-            ;;
-        3)
-            show_status
-            printf "按回车继续..."
-            read dummy
-            ;;
-        4)
-            restart_services
-            printf "按回车继续..."
-            read dummy
-            ;;
-        5)
-            view_logs
-            ;;
-        6)
-            uninstall_frp
-            printf "按回车继续..."
-            read dummy
-            ;;
-        f|F)
-            quick_panel
-            ;;
-        0)
-            exit 0
-            ;;
-        *)
-            print_error "无效选择"
-            sleep 1
-            ;;
-    esac
+    if test "$choice" = "1"; then
+        install_frp
+        setup_server
+        printf "按回车继续..."
+        read dummy
+    elif test "$choice" = "2"; then
+        install_frp
+        setup_client
+        printf "按回车继续..."
+        read dummy
+    elif test "$choice" = "3"; then
+        show_status
+        printf "按回车继续..."
+        read dummy
+    elif test "$choice" = "4"; then
+        restart_services
+        printf "按回车继续..."
+        read dummy
+    elif test "$choice" = "5"; then
+        view_logs
+    elif test "$choice" = "6"; then
+        uninstall_frp
+        printf "按回车继续..."
+        read dummy
+    elif test "$choice" = "f" || test "$choice" = "F"; then
+        quick_panel
+    elif test "$choice" = "0"; then
+        exit 0
+    else
+        print_error "无效选择"
+        sleep 1
+    fi
 done
 ```
 
 }
 
-do_main_menu
+main_loop
