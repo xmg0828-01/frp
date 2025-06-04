@@ -1,306 +1,676 @@
 #!/bin/bash
-# FRP管理脚本 v1.0
-# 支持Linux/OpenWrt/MacOS
-# 支持服务端/客户端管理
-# 按f键快速打开管理面板
+
+# FRP管理脚本 - 支持Linux和OpenWrt
+
+# 功能：安装、配置、管理FRP服务
 
 # 颜色定义
-RED="\033[31m"
-GREEN="\033[32m"
-YELLOW="\033[33m"
-BLUE="\033[36m"
-PLAIN="\033[0m"
+
+RED=’\033[0;31m’
+GREEN=’\033[0;32m’
+YELLOW=’\033[1;33m’
+BLUE=’\033[0;34m’
+NC=’\033[0m’
 
 # 配置文件路径
-FRP_PATH="/usr/local/frp"
-SERVER_CONFIG="${FRP_PATH}/frps.ini"
-CLIENT_CONFIG="${FRP_PATH}/frpc.ini"
-LOG_FILE="/var/log/frp.log"
+
+FRP_DIR=”/usr/local/frp”
+FRP_CONFIG_DIR=”/etc/frp”
+FRP_LOG_DIR=”/var/log/frp”
+FRPS_CONFIG=”$FRP_CONFIG_DIR/frps.ini”
+FRPC_CONFIG=”$FRP_CONFIG_DIR/frpc.ini”
+FRPS_LOG=”$FRP_LOG_DIR/frps.log”
+FRPC_LOG=”$FRP_LOG_DIR/frpc.log”
 
 # 检测系统类型
-check_sys() {
-  if [ -f /etc/redhat-release ]; then
-    release="centos"
-  elif grep -Eqi "debian" /etc/issue; then
-    release="debian"
-  elif grep -Eqi "ubuntu" /etc/issue; then
-    release="ubuntu"
-  elif grep -Eqi "openwrt" /etc/openwrt_release; then
-    release="openwrt"
-  elif [ "$(uname)" == "Darwin" ]; then
-    release="macos"
-  else
-    echo -e "${RED}不支持的系统!${PLAIN}" && exit 1
-  fi
+
+check_system() {
+if [ -f /etc/openwrt_release ]; then
+SYSTEM=“openwrt”
+elif [ -f /etc/debian_version ]; then
+SYSTEM=“debian”
+elif [ -f /etc/redhat-release ]; then
+SYSTEM=“centos”
+else
+SYSTEM=“linux”
+fi
 }
 
-# 安装FRP
-install_frp() {
-  echo -e "${BLUE}开始安装FRP...${PLAIN}"
-  
-  # 下载最新版本
-  local latest_ver=$(curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep -o '"tag_name": ".*"' | cut -d'"' -f4)
-  local download_url="https://github.com/fatedier/frp/releases/download/${latest_ver}/frp_${latest_ver:1}_linux_amd64.tar.gz"
-  
-  if [ "$release" = "macos" ]; then
-    download_url="https://github.com/fatedier/frp/releases/download/${latest_ver}/frp_${latest_ver:1}_darwin_amd64.tar.gz"
-  fi
+# 检测架构
 
-  wget -O frp.tar.gz ${download_url}
-  tar -xf frp.tar.gz
-  
-  # 创建目录
-  mkdir -p ${FRP_PATH}
-  
-  # 复制文件
-  cp frp*/frps ${FRP_PATH}/
-  cp frp*/frpc ${FRP_PATH}/
-  cp frp*/frps.ini ${FRP_PATH}/
-  cp frp*/frpc.ini ${FRP_PATH}/
-  
-  # 创建服务
-  create_service
-  
-  echo -e "${GREEN}FRP安装完成!${PLAIN}"
+check_arch() {
+ARCH=$(uname -m)
+case $ARCH in
+x86_64)
+ARCH=“amd64”
+;;
+aarch64)
+ARCH=“arm64”
+;;
+armv7l)
+ARCH=“arm”
+;;
+*)
+echo -e “${RED}不支持的架构: $ARCH${NC}”
+exit 1
+;;
+esac
 }
 
-# 创建服务
+# 创建必要目录
+
+create_dirs() {
+mkdir -p $FRP_DIR
+mkdir -p $FRP_CONFIG_DIR
+mkdir -p $FRP_LOG_DIR
+}
+
+# 下载FRP
+
+download_frp() {
+local version=$1
+local type=$2
+
+```
+echo -e "${BLUE}正在下载FRP ${version}...${NC}"
+
+local url="https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_linux_${ARCH}.tar.gz"
+local temp_file="/tmp/frp_${version}.tar.gz"
+
+if command -v wget >/dev/null 2>&1; then
+    wget -O "$temp_file" "$url" || return 1
+elif command -v curl >/dev/null 2>&1; then
+    curl -L -o "$temp_file" "$url" || return 1
+else
+    echo -e "${RED}请先安装wget或curl${NC}"
+    return 1
+fi
+
+tar -xzf "$temp_file" -C /tmp/
+
+if [ "$type" = "server" ] || [ "$type" = "both" ]; then
+    cp "/tmp/frp_${version}_linux_${ARCH}/frps" "$FRP_DIR/"
+    chmod +x "$FRP_DIR/frps"
+fi
+
+if [ "$type" = "client" ] || [ "$type" = "both" ]; then
+    cp "/tmp/frp_${version}_linux_${ARCH}/frpc" "$FRP_DIR/"
+    chmod +x "$FRP_DIR/frpc"
+fi
+
+rm -rf "/tmp/frp_${version}_linux_${ARCH}" "$temp_file"
+
+echo -e "${GREEN}FRP下载完成${NC}"
+```
+
+}
+
+# 创建系统服务
+
 create_service() {
-  if [ "$release" = "openwrt" ]; then
-    # OpenWrt服务
-    cat > /etc/init.d/frp << EOF
-#!/bin/sh /etc/rc.common
-START=99
-USE_PROCD=1
+local service_type=$1
+local service_name=“frp${service_type}”
+local exec_name=“frp${service_type}”
+local config_file=”$FRP_CONFIG_DIR/frp${service_type}.ini”
 
-start_service() {
-  procd_open_instance
-  procd_set_param command ${FRP_PATH}/frps -c ${SERVER_CONFIG}
-  procd_set_param file ${SERVER_CONFIG}
-  procd_set_param respawn
-  procd_close_instance
+```
+if [ "$SYSTEM" = "openwrt" ]; then
+    # OpenWrt init.d脚本
+    cat > "/etc/init.d/$service_name" <<EOF
+```
+
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+$FRP_DIR/$exec_name -c $config_file > $FRP_LOG_DIR/${exec_name}.log 2>&1 &
+echo $! > /var/run/${service_name}.pid
+}
+
+stop() {
+if [ -f /var/run/${service_name}.pid ]; then
+kill $(cat /var/run/${service_name}.pid)
+rm -f /var/run/${service_name}.pid
+fi
+}
+
+restart() {
+stop
+sleep 1
+start
 }
 EOF
-    chmod +x /etc/init.d/frp
-    
-  elif [ "$release" = "macos" ]; then
-    # MacOS服务
-    cat > /Library/LaunchDaemons/com.frp.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.frp</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${FRP_PATH}/frps</string>
-    <string>-c</string>
-    <string>${SERVER_CONFIG}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-EOF
-    launchctl load -w /Library/LaunchDaemons/com.frp.plist
-    
-  else
-    # Linux服务
-    cat > /etc/systemd/system/frps.service << EOF
+chmod +x “/etc/init.d/$service_name”
+/etc/init.d/$service_name enable
+else
+# Systemd服务
+cat > “/etc/systemd/system/${service_name}.service” <<EOF
 [Unit]
-Description=FRP Server
+Description=FRP ${service_type} Service
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${FRP_PATH}/frps -c ${SERVER_CONFIG}
-Restart=always
-RestartSec=5
+ExecStart=$FRP_DIR/$exec_name -c $config_file
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable frps
-  fi
+systemctl daemon-reload
+systemctl enable ${service_name}
+fi
 }
 
-# 配置服务端
-config_server() {
-  echo -e "${BLUE}配置FRP服务端...${PLAIN}"
-  read -p "绑定端口[7000]: " bind_port
-  read -p "面板端口[7500]: " dashboard_port
-  read -p "面板用户名[admin]: " dashboard_user  
-  read -p "面板密码[admin]: " dashboard_pwd
-  
-  [ -z "$bind_port" ] && bind_port="7000"
-  [ -z "$dashboard_port" ] && dashboard_port="7500"
-  [ -z "$dashboard_user" ] && dashboard_user="admin"
-  [ -z "$dashboard_pwd" ] && dashboard_pwd="admin"
-  
-  cat > ${SERVER_CONFIG} << EOF
+# 配置FRP服务器
+
+configure_frps() {
+echo -e “${BLUE}配置FRP服务器${NC}”
+
+```
+read -p "请输入监听端口 [7000]: " bind_port
+bind_port=${bind_port:-7000}
+
+read -p "请输入Dashboard端口 [7500]: " dashboard_port
+dashboard_port=${dashboard_port:-7500}
+
+read -p "请输入Dashboard用户名 [admin]: " dashboard_user
+dashboard_user=${dashboard_user:-admin}
+
+read -p "请输入Dashboard密码 [admin]: " dashboard_pwd
+dashboard_pwd=${dashboard_pwd:-admin}
+
+read -p "请输入Token [123456]: " token
+token=${token:-123456}
+
+cat > "$FRPS_CONFIG" <<EOF
+```
+
 [common]
-bind_port = ${bind_port}
-dashboard_port = ${dashboard_port}
-dashboard_user = ${dashboard_user}
-dashboard_pwd = ${dashboard_pwd}
+bind_port = $bind_port
+dashboard_port = $dashboard_port
+dashboard_user = $dashboard_user
+dashboard_pwd = $dashboard_pwd
+token = $token
+log_file = $FRPS_LOG
+log_level = info
+log_max_days = 7
 EOF
 
-  restart_frp
-  echo -e "${GREEN}服务端配置完成!${PLAIN}"
+```
+echo -e "${GREEN}FRP服务器配置完成${NC}"
+```
+
 }
 
-# 配置客户端
-config_client() {
-  echo -e "${BLUE}配置FRP客户端...${PLAIN}"
-  read -p "服务器地址: " server_addr
-  read -p "服务器端口[7000]: " server_port
-  read -p "代理名称: " proxy_name
-  read -p "本地端口: " local_port
-  read -p "远程端口: " remote_port
-  
-  [ -z "$server_port" ] && server_port="7000"
-  
-  cat > ${CLIENT_CONFIG} << EOF
-[common]
-server_addr = ${server_addr}
-server_port = ${server_port}
+# 配置FRP客户端
 
-[${proxy_name}]
-type = tcp
-local_ip = 127.0.0.1
-local_port = ${local_port}
-remote_port = ${remote_port}
+configure_frpc() {
+echo -e “${BLUE}配置FRP客户端${NC}”
+
+```
+read -p "请输入服务器地址: " server_addr
+if [ -z "$server_addr" ]; then
+    echo -e "${RED}服务器地址不能为空${NC}"
+    return 1
+fi
+
+read -p "请输入服务器端口 [7000]: " server_port
+server_port=${server_port:-7000}
+
+read -p "请输入Token [123456]: " token
+token=${token:-123456}
+
+cat > "$FRPC_CONFIG" <<EOF
+```
+
+[common]
+server_addr = $server_addr
+server_port = $server_port
+token = $token
+log_file = $FRPC_LOG
+log_level = info
+log_max_days = 7
+
+# 示例配置
+
+# [ssh]
+
+# type = tcp
+
+# local_ip = 127.0.0.1
+
+# local_port = 22
+
+# remote_port = 6000
+
+# [web]
+
+# type = http
+
+# local_port = 80
+
+# custom_domains = www.example.com
+
 EOF
 
-  restart_frp
-  echo -e "${GREEN}客户端配置完成!${PLAIN}"
+```
+echo -e "${GREEN}FRP客户端基础配置完成${NC}"
+echo -e "${YELLOW}请编辑 $FRPC_CONFIG 添加具体的代理规则${NC}"
+```
+
 }
 
-# 重启FRP
-restart_frp() {
-  echo -e "${BLUE}重启FRP服务...${PLAIN}"
-  
-  if [ "$release" = "openwrt" ]; then
-    /etc/init.d/frp restart
-  elif [ "$release" = "macos" ]; then
-    launchctl unload /Library/LaunchDaemons/com.frp.plist
-    launchctl load -w /Library/LaunchDaemons/com.frp.plist
-  else
-    systemctl restart frps
-  fi
-  
-  echo -e "${GREEN}服务已重启!${PLAIN}"
+# 添加客户端规则
+
+add_client_rule() {
+echo -e “${BLUE}添加客户端代理规则${NC}”
+
+```
+read -p "请输入规则名称: " rule_name
+if [ -z "$rule_name" ]; then
+    echo -e "${RED}规则名称不能为空${NC}"
+    return 1
+fi
+
+echo "请选择代理类型:"
+echo "1) TCP"
+echo "2) HTTP"
+echo "3) HTTPS"
+echo "4) UDP"
+read -p "请选择 [1-4]: " proxy_type
+
+case $proxy_type in
+    1)
+        type="tcp"
+        read -p "请输入本地IP [127.0.0.1]: " local_ip
+        local_ip=${local_ip:-127.0.0.1}
+        read -p "请输入本地端口: " local_port
+        read -p "请输入远程端口: " remote_port
+        
+        cat >> "$FRPC_CONFIG" <<EOF
+```
+
+[$rule_name]
+type = $type
+local_ip = $local_ip
+local_port = $local_port
+remote_port = $remote_port
+EOF
+;;
+2)
+type=“http”
+read -p “请输入本地端口: “ local_port
+read -p “请输入自定义域名: “ custom_domains
+
+```
+        cat >> "$FRPC_CONFIG" <<EOF
+```
+
+[$rule_name]
+type = $type
+local_port = $local_port
+custom_domains = $custom_domains
+EOF
+;;
+3)
+type=“https”
+read -p “请输入本地端口: “ local_port
+read -p “请输入自定义域名: “ custom_domains
+
+```
+        cat >> "$FRPC_CONFIG" <<EOF
+```
+
+[$rule_name]
+type = $type
+local_port = $local_port
+custom_domains = $custom_domains
+EOF
+;;
+4)
+type=“udp”
+read -p “请输入本地IP [127.0.0.1]: “ local_ip
+local_ip=${local_ip:-127.0.0.1}
+read -p “请输入本地端口: “ local_port
+read -p “请输入远程端口: “ remote_port
+
+```
+        cat >> "$FRPC_CONFIG" <<EOF
+```
+
+[$rule_name]
+type = $type
+local_ip = $local_ip
+local_port = $local_port
+remote_port = $remote_port
+EOF
+;;
+*)
+echo -e “${RED}无效的选择${NC}”
+return 1
+;;
+esac
+
+```
+echo -e "${GREEN}规则添加成功${NC}"
+```
+
+}
+
+# 查看服务状态
+
+check_status() {
+local service=$1
+
+```
+if [ "$SYSTEM" = "openwrt" ]; then
+    if [ -f "/var/run/frp${service}.pid" ] && kill -0 $(cat /var/run/frp${service}.pid) 2>/dev/null; then
+        echo -e "${GREEN}FRP${service} 正在运行${NC}"
+        echo "PID: $(cat /var/run/frp${service}.pid)"
+    else
+        echo -e "${RED}FRP${service} 未运行${NC}"
+    fi
+else
+    systemctl status frp${service} --no-pager
+fi
+```
+
 }
 
 # 查看日志
-view_log() {
-  if [ -f "$LOG_FILE" ]; then
-    tail -f $LOG_FILE
-  else
-    echo -e "${RED}日志文件不存在!${PLAIN}"
-  fi
+
+view_logs() {
+local service=$1
+local log_file=”$FRP_LOG_DIR/frp${service}.log”
+
+```
+if [ -f "$log_file" ]; then
+    echo -e "${BLUE}=== FRP${service} 日志 ===${NC}"
+    tail -n 50 "$log_file"
+else
+    echo -e "${YELLOW}日志文件不存在${NC}"
+fi
+```
+
 }
 
-# 查看连接状态
-view_status() {
-  echo -e "${BLUE}FRP连接状态:${PLAIN}"
-  echo -e "------------------------"
-  
-  # 获取面板信息
-  local dashboard_addr="http://localhost:7500"
-  local dashboard_info=$(curl -s -u admin:admin ${dashboard_addr}/api/status)
-  
-  # 解析并显示客户端连接
-  echo "$dashboard_info" | while read line; do
-    if [[ $line =~ "proxy_name" ]]; then
-      local name=$(echo $line | cut -d'"' -f4)
-      local ip=$(echo $line | cut -d'"' -f8)
-      echo -e "代理: ${GREEN}${name}${PLAIN}"
-      echo -e "客户端IP: ${YELLOW}${ip}${PLAIN}"
+# 查看管理面板和连接信息
+
+view_dashboard() {
+echo -e “${BLUE}=== FRP管理信息 ===${NC}”
+
+```
+# 检查FRPS状态
+if [ -f "$FRPS_CONFIG" ]; then
+    local dashboard_port=$(grep "dashboard_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    local bind_port=$(grep "bind_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    
+    echo -e "${GREEN}FRP服务器信息:${NC}"
+    echo "监听端口: $bind_port"
+    echo "Dashboard地址: http://localhost:$dashboard_port"
+    
+    # 显示连接的客户端
+    if [ "$SYSTEM" = "openwrt" ]; then
+        if [ -f "/var/run/frps.pid" ] && kill -0 $(cat /var/run/frps.pid) 2>/dev/null; then
+            echo -e "\n${GREEN}已连接的客户端:${NC}"
+            netstat -tn 2>/dev/null | grep ":$bind_port" | grep ESTABLISHED | awk '{print $5}' | cut -d':' -f1 | sort | uniq
+        fi
+    else
+        if systemctl is-active frps >/dev/null 2>&1; then
+            echo -e "\n${GREEN}已连接的客户端:${NC}"
+            ss -tn state established "( sport = :$bind_port )" | tail -n +2 | awk '{print $4}' | cut -d':' -f1 | sort | uniq
+        fi
     fi
-  done
-  
-  echo -e "------------------------"
+fi
+
+# 检查FRPC状态
+if [ -f "$FRPC_CONFIG" ]; then
+    local server_addr=$(grep "server_addr" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    local server_port=$(grep "server_port" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    
+    echo -e "\n${GREEN}FRP客户端信息:${NC}"
+    echo "服务器地址: $server_addr:$server_port"
+    
+    # 显示配置的规则
+    echo -e "\n${GREEN}配置的代理规则:${NC}"
+    grep "^\[" "$FRPC_CONFIG" | grep -v "\[common\]" | tr -d '[]'
+fi
+```
+
+}
+
+# 启动服务
+
+start_service() {
+local service=$1
+
+```
+if [ "$SYSTEM" = "openwrt" ]; then
+    /etc/init.d/frp${service} start
+else
+    systemctl start frp${service}
+fi
+
+echo -e "${GREEN}FRP${service} 启动完成${NC}"
+```
+
+}
+
+# 停止服务
+
+stop_service() {
+local service=$1
+
+```
+if [ "$SYSTEM" = "openwrt" ]; then
+    /etc/init.d/frp${service} stop
+else
+    systemctl stop frp${service}
+fi
+
+echo -e "${GREEN}FRP${service} 停止完成${NC}"
+```
+
+}
+
+# 重启服务
+
+restart_service() {
+local service=$1
+
+```
+if [ "$SYSTEM" = "openwrt" ]; then
+    /etc/init.d/frp${service} restart
+else
+    systemctl restart frp${service}
+fi
+
+echo -e "${GREEN}FRP${service} 重启完成${NC}"
+```
+
 }
 
 # 卸载FRP
+
 uninstall_frp() {
-  echo -e "${YELLOW}确定要卸载FRP吗? (y/n)${PLAIN}"
-  read -p "" confirm
-  
-  if [ "$confirm" != "y" ]; then
+echo -e “${RED}确定要卸载FRP吗？这将删除所有配置和日志文件。${NC}”
+read -p “输入 ‘yes’ 确认卸载: “ confirm
+
+```
+if [ "$confirm" != "yes" ]; then
+    echo "取消卸载"
     return
-  fi
-  
-  if [ "$release" = "openwrt" ]; then
-    /etc/init.d/frp stop
-    rm -f /etc/init.d/frp
-  elif [ "$release" = "macos" ]; then
-    launchctl unload /Library/LaunchDaemons/com.frp.plist
-    rm -f /Library/LaunchDaemons/com.frp.plist
-  else
-    systemctl stop frps
-    systemctl disable frps
-    rm -f /etc/systemd/system/frps.service
-  fi
-  
-  rm -rf ${FRP_PATH}
-  rm -f $LOG_FILE
-  
-  echo -e "${GREEN}FRP已卸载!${PLAIN}"
+fi
+
+# 停止服务
+if [ "$SYSTEM" = "openwrt" ]; then
+    [ -f "/etc/init.d/frps" ] && /etc/init.d/frps stop && /etc/init.d/frps disable
+    [ -f "/etc/init.d/frpc" ] && /etc/init.d/frpc stop && /etc/init.d/frpc disable
+    rm -f /etc/init.d/frps /etc/init.d/frpc
+else
+    systemctl stop frps frpc 2>/dev/null
+    systemctl disable frps frpc 2>/dev/null
+    rm -f /etc/systemd/system/frps.service /etc/systemd/system/frpc.service
+    systemctl daemon-reload
+fi
+
+# 删除文件
+rm -rf $FRP_DIR
+rm -rf $FRP_CONFIG_DIR
+rm -rf $FRP_LOG_DIR
+
+echo -e "${GREEN}FRP卸载完成${NC}"
+```
+
 }
 
 # 主菜单
-show_menu() {
-  echo -e "
-  ${GREEN}FRP 管理脚本${PLAIN} ${RED}[v1.0]${PLAIN}
-  ――――――――――――――――――――――――
-  ${GREEN}1.${PLAIN} 安装 FRP
-  ${GREEN}2.${PLAIN} 配置服务端
-  ${GREEN}3.${PLAIN} 配置客户端  
-  ${GREEN}4.${PLAIN} 重启服务
-  ${GREEN}5.${PLAIN} 查看日志
-  ${GREEN}6.${PLAIN} 查看状态
-  ${GREEN}7.${PLAIN} 卸载 FRP
-  ${GREEN}0.${PLAIN} 退出脚本
-  ――――――――――――――――――――――――
-  "
-  echo && read -p "请输入选择 [0-7]: " num
-  
-  case "$num" in
-    1) install_frp ;;
-    2) config_server ;;
-    3) config_client ;;
-    4) restart_frp ;;
-    5) view_log ;;
-    6) view_status ;;
-    7) uninstall_frp ;;
-    0) exit 0 ;;
-    *) echo -e "${RED}请输入正确数字 [0-7]${PLAIN}" ;;
-  esac
+
+main_menu() {
+clear
+echo -e “${BLUE}==================================${NC}”
+echo -e “${BLUE}       FRP 管理脚本 v1.0          ${NC}”
+echo -e “${BLUE}==================================${NC}”
+echo -e “${GREEN}系统: $SYSTEM | 架构: $ARCH${NC}”
+echo -e “${BLUE}==================================${NC}”
+echo “1) 安装 FRP 服务端”
+echo “2) 安装 FRP 客户端”
+echo “3) 安装 FRP 服务端+客户端”
+echo “4) 配置 FRP 服务端”
+echo “5) 配置 FRP 客户端”
+echo “6) 添加客户端代理规则”
+echo “7) 启动 FRP 服务端”
+echo “8) 启动 FRP 客户端”
+echo “9) 停止 FRP 服务端”
+echo “10) 停止 FRP 客户端”
+echo “11) 重启 FRP 服务端”
+echo “12) 重启 FRP 客户端”
+echo “13) 查看 FRP 服务端状态”
+echo “14) 查看 FRP 客户端状态”
+echo “15) 查看 FRP 服务端日志”
+echo “16) 查看 FRP 客户端日志”
+echo “17) 编辑服务端配置”
+echo “18) 编辑客户端配置”
+echo “19) 卸载 FRP”
+echo “f) 查看管理面板信息”
+echo “0) 退出”
+echo -e “${BLUE}==================================${NC}”
+
+```
+read -p "请选择操作: " choice
+
+case $choice in
+    1)
+        check_arch
+        create_dirs
+        read -p "请输入FRP版本号 [0.51.3]: " version
+        version=${version:-0.51.3}
+        download_frp "$version" "server" && \
+        configure_frps && \
+        create_service "s"
+        ;;
+    2)
+        check_arch
+        create_dirs
+        read -p "请输入FRP版本号 [0.51.3]: " version
+        version=${version:-0.51.3}
+        download_frp "$version" "client" && \
+        configure_frpc && \
+        create_service "c"
+        ;;
+    3)
+        check_arch
+        create_dirs
+        read -p "请输入FRP版本号 [0.51.3]: " version
+        version=${version:-0.51.3}
+        download_frp "$version" "both" && \
+        configure_frps && \
+        configure_frpc && \
+        create_service "s" && \
+        create_service "c"
+        ;;
+    4)
+        configure_frps
+        ;;
+    5)
+        configure_frpc
+        ;;
+    6)
+        add_client_rule
+        ;;
+    7)
+        start_service "s"
+        ;;
+    8)
+        start_service "c"
+        ;;
+    9)
+        stop_service "s"
+        ;;
+    10)
+        stop_service "c"
+        ;;
+    11)
+        restart_service "s"
+        ;;
+    12)
+        restart_service "c"
+        ;;
+    13)
+        check_status "s"
+        ;;
+    14)
+        check_status "c"
+        ;;
+    15)
+        view_logs "s"
+        ;;
+    16)
+        view_logs "c"
+        ;;
+    17)
+        ${EDITOR:-vi} "$FRPS_CONFIG"
+        ;;
+    18)
+        ${EDITOR:-vi} "$FRPC_CONFIG"
+        ;;
+    19)
+        uninstall_frp
+        ;;
+    f|F)
+        view_dashboard
+        ;;
+    0)
+        echo "退出脚本"
+        exit 0
+        ;;
+    *)
+        echo -e "${RED}无效的选择${NC}"
+        ;;
+esac
+
+echo
+read -p "按回车键继续..." -n1 -s
+main_menu
+```
+
 }
 
-# 检查按键
-check_input() {
-  if read -t 0.1 -n 1 key; then
-    if [[ $key = "f" ]] || [[ $key = "F" ]]; then
-      view_status
-    fi
-  fi
-}
+# 初始化
 
-# 主程序
-main() {
-  check_sys
-  
-  while true; do
-    show_menu
-    check_input
-  done
-}
+check_system
 
-main
+# 检查root权限
+
+if [ $EUID -ne 0 ]; then
+echo -e “${RED}此脚本需要root权限运行${NC}”
+exit 1
+fi
+
+# 运行主菜单
+
+main_menu
