@@ -2,366 +2,290 @@
 set -e
 
 FRP_VERSION=“0.52.3”
-INSTALL_DIR=”/opt/frp”
-CONFIG_DIR=”/etc/frp”
 
-echo_info() {
-echo “[INFO] $1”
+log() {
+echo “[$1] $2”
 }
 
-echo_success() {
-echo “[SUCCESS] $1”
-}
-
-echo_error() {
-echo “[ERROR] $1”
-}
-
-detect_system() {
-if [ -f /etc/openwrt_release ]; then
-OS_TYPE=“openwrt”
-elif [ “$(uname)” = “Darwin” ]; then
-OS_TYPE=“darwin”
-else
-OS_TYPE=“linux”
-fi
-
-```
-case "$(uname -m)" in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    armv7l|armv6l) ARCH="arm" ;;
-    *) echo_error "不支持的架构"; exit 1 ;;
+get_arch() {
+case $(uname -m) in
+x86_64) echo “amd64” ;;
+aarch64) echo “arm64” ;;
+armv7l) echo “arm” ;;
+*) echo “amd64” ;;
 esac
-echo_success "系统: $OS_TYPE-$ARCH"
-```
-
 }
 
-download_frp() {
-detect_system
-filename=“frp_${FRP_VERSION}*${OS_TYPE}*${ARCH}”
-url=“https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${filename}.tar.gz”
-
-```
-echo_info "下载 FRP..."
-temp_dir="/tmp/frp_$$"
-mkdir -p "$temp_dir"
-cd "$temp_dir"
-
-if command -v wget >/dev/null; then
-    wget -O frp.tar.gz "$url"
+get_os() {
+if [ -f /etc/openwrt_release ]; then
+echo “openwrt”
+elif [ “$(uname)” = “Darwin” ]; then
+echo “darwin”
 else
-    curl -L -o frp.tar.gz "$url"
+echo “linux”
 fi
+}
 
-tar -xzf frp.tar.gz
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
-cp "${filename}"/frp* "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR"/frp*
-cd /
-rm -rf "$temp_dir"
-echo_success "安装完成"
+install() {
+OS=$(get_os)
+ARCH=$(get_arch)
+
+```
+log "INFO" "下载 FRP $FRP_VERSION for $OS-$ARCH"
+
+cd /tmp
+wget -q "https://github.com/fatedier/frp/releases/download/v$FRP_VERSION/frp_${FRP_VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf "frp_${FRP_VERSION}_${OS}_${ARCH}.tar.gz"
+
+mkdir -p /opt/frp /etc/frp
+cp "frp_${FRP_VERSION}_${OS}_${ARCH}"/frp* /opt/frp/
+chmod +x /opt/frp/frp*
+
+rm -rf "frp_${FRP_VERSION}_${OS}_${ARCH}"*
+log "SUCCESS" "安装完成"
 ```
 
 }
 
-config_server() {
-echo_info “配置服务端…”
-printf “端口 [7000]: “
-read port
-port=${port:-7000}
+server() {
+printf “端口[7000]: “; read port; port=${port:-7000}
+printf “面板端口[7500]: “; read dash; dash=${dash:-7500}
+printf “用户[admin]: “; read user; user=${user:-admin}
+printf “密码: “; read pwd
+printf “Token: “; read token
 
 ```
-printf "面板端口 [7500]: "
-read dash_port
-dash_port=${dash_port:-7500}
-
-printf "用户名 [admin]: "
-read user
-user=${user:-admin}
-
-printf "密码: "
-read pwd
-
-printf "Token: "
-read token
-
-cat > "$CONFIG_DIR/frps.ini" <<EOF
+cat > /etc/frp/frps.ini << EOF
 ```
 
 [common]
 bind_port = $port
-dashboard_port = $dash_port
+dashboard_port = $dash
 dashboard_user = $user
 dashboard_pwd = $pwd
-authentication_method = token
 token = $token
 log_file = /var/log/frps.log
-log_level = info
-max_clients = 50
-allow_ports = 1000-65535
 EOF
 
 ```
-mkdir -p /var/log
 touch /var/log/frps.log
-make_service "frps"
-echo_success "服务端配置完成"
+
+if [ "$(get_os)" = "openwrt" ]; then
+    cat > /etc/init.d/frps << 'EOF'
 ```
 
-}
-
-config_client() {
-echo_info “配置客户端…”
-printf “服务器地址: “
-read server
-
-```
-printf "端口 [7000]: "
-read port
-port=${port:-7000}
-
-printf "Token: "
-read token
-
-printf "本地端口: "
-read local_port
-
-printf "远程端口: "
-read remote_port
-
-printf "服务名 [ssh]: "
-read name
-name=${name:-ssh}
-
-cat > "$CONFIG_DIR/frpc.ini" <<EOF
-```
-
-[common]
-server_addr = $server
-server_port = $port
-authentication_method = token
-token = $token
-log_file = /var/log/frpc.log
-log_level = info
-
-[$name]
-type = tcp
-local_ip = 127.0.0.1
-local_port = $local_port
-remote_port = $remote_port
-EOF
-
-```
-mkdir -p /var/log
-touch /var/log/frpc.log
-make_service "frpc"
-echo_success "客户端配置完成"
-```
-
-}
-
-make_service() {
-service=$1
-if [ “$OS_TYPE” = “openwrt” ]; then
-cat > “/etc/init.d/$service” <<EOF
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
 start_service() {
 procd_open_instance
-procd_set_param command $INSTALL_DIR/$service -c $CONFIG_DIR/$service.ini
+procd_set_param command /opt/frp/frps -c /etc/frp/frps.ini
 procd_set_param respawn
 procd_close_instance
 }
 EOF
-chmod +x “/etc/init.d/$service”
-“/etc/init.d/$service” enable
-“/etc/init.d/$service” start
+chmod +x /etc/init.d/frps
+/etc/init.d/frps enable
+/etc/init.d/frps start
 else
-cat > “/etc/systemd/system/$service.service” <<EOF
+cat > /etc/systemd/system/frps.service << EOF
 [Unit]
-Description=FRP $service
+Description=frps
 After=network.target
 
 [Service]
 Type=simple
+ExecStart=/opt/frp/frps -c /etc/frp/frps.ini
 Restart=on-failure
-ExecStart=$INSTALL_DIR/$service -c $CONFIG_DIR/$service.ini
 
 [Install]
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable “$service”
-systemctl start “$service”
+systemctl enable frps
+systemctl start frps
 fi
-echo_success “$service 启动完成”
+
+```
+log "SUCCESS" "服务端配置完成"
+```
+
 }
 
-panel_info() {
-if [ ! -f “$CONFIG_DIR/frps.ini” ]; then
-echo_error “未找到服务端配置”
+client() {
+printf “服务器: “; read srv
+printf “端口[7000]: “; read port; port=${port:-7000}
+printf “Token: “; read token
+printf “本地端口: “; read lport
+printf “远程端口: “; read rport
+
+```
+cat > /etc/frp/frpc.ini << EOF
+```
+
+[common]
+server_addr = $srv
+server_port = $port
+token = $token
+log_file = /var/log/frpc.log
+
+[ssh]
+type = tcp
+local_ip = 127.0.0.1
+local_port = $lport
+remote_port = $rport
+EOF
+
+```
+touch /var/log/frpc.log
+
+if [ "$(get_os)" = "openwrt" ]; then
+    cat > /etc/init.d/frpc << 'EOF'
+```
+
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+start_service() {
+procd_open_instance
+procd_set_param command /opt/frp/frpc -c /etc/frp/frpc.ini
+procd_set_param respawn
+procd_close_instance
+}
+EOF
+chmod +x /etc/init.d/frpc
+/etc/init.d/frpc enable
+/etc/init.d/frpc start
+else
+cat > /etc/systemd/system/frpc.service << EOF
+[Unit]
+Description=frpc
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/frp/frpc -c /etc/frp/frpc.ini
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable frpc
+systemctl start frpc
+fi
+
+```
+log "SUCCESS" "客户端配置完成"
+```
+
+}
+
+panel() {
+if [ ! -f /etc/frp/frps.ini ]; then
+log “ERROR” “未找到服务端配置”
 return
 fi
 
 ```
-port=$(grep dashboard_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-user=$(grep dashboard_user "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-pwd=$(grep dashboard_pwd "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-ip=$(curl -s ifconfig.me 2>/dev/null || echo "YOUR_IP")
+port=$(grep dashboard_port /etc/frp/frps.ini | cut -d= -f2 | tr -d ' ')
+user=$(grep dashboard_user /etc/frp/frps.ini | cut -d= -f2 | tr -d ' ')
+pwd=$(grep dashboard_pwd /etc/frp/frps.ini | cut -d= -f2 | tr -d ' ')
+ip=$(curl -s ifconfig.me || echo "YOUR_IP")
 
 clear
-echo "========================="
+echo "===================="
 echo "FRP 管理面板"
-echo "========================="
+echo "===================="
 echo "地址: http://$ip:$port"
 echo "用户: $user"
 echo "密码: $pwd"
-echo "========================="
+echo "===================="
 
-if [ -f "/var/log/frps.log" ]; then
-    echo "最近连接的客户端IP:"
-    tail -20 /var/log/frps.log | grep "login from" | tail -5 | while read line; do
-        client_ip=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+')
-        if [ -n "$client_ip" ]; then
-            echo "  $client_ip"
-        fi
+if [ -f /var/log/frps.log ]; then
+    echo "最近连接:"
+    tail -10 /var/log/frps.log | grep "login from" | while read line; do
+        echo "  $(echo $line | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+')"
     done
-    
-    echo ""
-    echo "当前活跃连接:"
-    bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-    netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | while read line; do
-        echo "  $(echo $line | awk '{print $5}' | cut -d: -f1)"
-    done
-    
-    echo ""
-    echo "活跃代理:"
-    tail -20 /var/log/frps.log | grep "proxy added" | tail -5
-    echo "========================="
 fi
 
-printf "按回车返回..."
-read dummy
+printf "按回车..."
+read
 ```
 
 }
 
-check_status() {
-echo “=== FRP 状态 ===”
-
-```
-for service in frps frpc; do
-    if [ -f "$CONFIG_DIR/$service.ini" ]; then
-        printf "$service: "
-        if [ "$OS_TYPE" = "openwrt" ]; then
-            if pgrep -f "$service" >/dev/null; then
-                echo "运行中"
-            else
-                echo "未运行"
-            fi
-        else
-            if systemctl is-active "$service" >/dev/null 2>&1; then
-                echo "运行中"
-            else
-                echo "未运行"
-            fi
-        fi
-    fi
+status() {
+echo “=== 服务状态 ===”
+for svc in frps frpc; do
+if [ -f “/etc/frp/$svc.ini” ]; then
+printf “$svc: “
+if [ “$(get_os)” = “openwrt” ]; then
+if pgrep $svc >/dev/null; then echo “运行中”; else echo “未运行”; fi
+else
+systemctl is-active $svc || echo “未运行”
+fi
+fi
 done
 
-if [ -f "/var/log/frps.log" ]; then
+```
+if [ -f /var/log/frps.log ]; then
     echo ""
     echo "连接统计:"
-    today=$(date '+%Y/%m/%d')
-    count=$(grep "$today" /var/log/frps.log | grep -c "login from" 2>/dev/null || echo "0")
-    echo "  今日连接: $count 次"
-    
-    bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
-    active=$(netstat -tn 2>/dev/null | grep -c ":$bind_port.*ESTABLISHED" || echo "0")
-    echo "  活跃连接: $active 个"
-fi
-
-if [ -f "/var/log/frpc.log" ]; then
-    echo ""
-    echo "客户端日志:"
-    tail -3 /var/log/frpc.log
+    today=$(date +%Y/%m/%d)
+    count=$(grep "$today" /var/log/frps.log | grep -c "login from" || echo "0")
+    echo "  今日: $count 次"
 fi
 ```
 
 }
 
-restart_all() {
-for service in frps frpc; do
-if [ -f “$CONFIG_DIR/$service.ini” ]; then
-if [ “$OS_TYPE” = “openwrt” ]; then
-“/etc/init.d/$service” restart
+restart() {
+for svc in frps frpc; do
+if [ -f “/etc/frp/$svc.ini” ]; then
+if [ “$(get_os)” = “openwrt” ]; then
+/etc/init.d/$svc restart
 else
-systemctl restart “$service”
+systemctl restart $svc
 fi
-echo_success “$service 重启完成”
+log “SUCCESS” “$svc 重启完成”
 fi
 done
 }
 
-show_logs() {
-echo “1. frps日志  2. frpc日志”
-printf “选择: “
-read choice
+logs() {
+echo “1.frps 2.frpc”
+printf “选择: “; read choice
 case $choice in
-1)
-if [ -f /var/log/frps.log ]; then
-tail -f /var/log/frps.log
-else
-echo “日志不存在”
-fi
-;;
-2)
-if [ -f /var/log/frpc.log ]; then
-tail -f /var/log/frpc.log
-else
-echo “日志不存在”
-fi
-;;
+1) tail -f /var/log/frps.log ;;
+2) tail -f /var/log/frpc.log ;;
 esac
 }
 
-remove_all() {
-printf “确定卸载? (yes/no): “
-read confirm
+uninstall() {
+printf “确定卸载?(yes/no): “; read confirm
 if [ “$confirm” = “yes” ]; then
-for service in frps frpc; do
-if [ “$OS_TYPE” = “openwrt” ]; then
-“/etc/init.d/$service” stop 2>/dev/null || true
-rm -f “/etc/init.d/$service”
+for svc in frps frpc; do
+if [ “$(get_os)” = “openwrt” ]; then
+/etc/init.d/$svc stop 2>/dev/null || true
+rm -f /etc/init.d/$svc
 else
-systemctl stop “$service” 2>/dev/null || true
-systemctl disable “$service” 2>/dev/null || true
-rm -f “/etc/systemd/system/$service.service”
+systemctl stop $svc 2>/dev/null || true
+systemctl disable $svc 2>/dev/null || true
+rm -f /etc/systemd/system/$svc.service
 fi
 done
-
-```
-    rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
-    rm -f /var/log/frp*.log
-    
-    if [ "$OS_TYPE" != "openwrt" ]; then
-        systemctl daemon-reload
-    fi
-    
-    echo_success "卸载完成"
+rm -rf /opt/frp /etc/frp /var/log/frp*.log
+[ “$(get_os)” != “openwrt” ] && systemctl daemon-reload
+log “SUCCESS” “卸载完成”
 fi
-```
-
 }
 
 while true; do
 clear
-echo “===============================”
-echo “    FRP 管理脚本 v1.0”
-echo “===============================”
+echo “=================”
+echo “  FRP 管理脚本”
+echo “=================”
 echo “1. 安装服务端”
 echo “2. 安装客户端”
 echo “3. 查看状态”
@@ -370,52 +294,20 @@ echo “5. 查看日志”
 echo “6. 卸载”
 echo “f. 管理面板”
 echo “0. 退出”
-echo “===============================”
-printf “选择: “
-read choice
+echo “=================”
+printf “选择: “; read choice
 
 ```
 case $choice in
-    1)
-        download_frp
-        config_server
-        printf "按回车继续..."
-        read dummy
-        ;;
-    2)
-        download_frp
-        config_client
-        printf "按回车继续..."
-        read dummy
-        ;;
-    3)
-        check_status
-        printf "按回车继续..."
-        read dummy
-        ;;
-    4)
-        restart_all
-        printf "按回车继续..."
-        read dummy
-        ;;
-    5)
-        show_logs
-        ;;
-    6)
-        remove_all
-        printf "按回车继续..."
-        read dummy
-        ;;
-    f|F)
-        panel_info
-        ;;
-    0)
-        exit 0
-        ;;
-    *)
-        echo "无效选择"
-        sleep 1
-        ;;
+    1) install; server; printf "按回车..."; read ;;
+    2) install; client; printf "按回车..."; read ;;
+    3) status; printf "按回车..."; read ;;
+    4) restart; printf "按回车..."; read ;;
+    5) logs ;;
+    6) uninstall; printf "按回车..."; read ;;
+    f|F) panel ;;
+    0) exit 0 ;;
+    *) echo "无效选择"; sleep 1 ;;
 esac
 ```
 
