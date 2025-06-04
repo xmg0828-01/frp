@@ -5,15 +5,15 @@ FRP_VERSION=“0.52.3”
 INSTALL_DIR=”/opt/frp”
 CONFIG_DIR=”/etc/frp”
 
-log_info() {
+info() {
 echo “[INFO] $1”
 }
 
-log_success() {
+success() {
 echo “[SUCCESS] $1”
 }
 
-log_error() {
+error() {
 echo “[ERROR] $1”
 }
 
@@ -31,9 +31,9 @@ case "$(uname -m)" in
     x86_64|amd64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
     armv7l|armv6l) ARCH="arm" ;;
-    *) log_error "不支持的架构"; exit 1 ;;
+    *) error "不支持的架构"; exit 1 ;;
 esac
-log_success "系统: $OS_TYPE-$ARCH"
+success "系统: $OS_TYPE-$ARCH"
 ```
 
 }
@@ -44,7 +44,7 @@ filename=“frp_${FRP_VERSION}*${OS_TYPE}*${ARCH}”
 url=“https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${filename}.tar.gz”
 
 ```
-log_info "下载 FRP..."
+info "下载 FRP..."
 temp_dir="/tmp/frp_$$"
 mkdir -p "$temp_dir"
 cd "$temp_dir"
@@ -61,20 +61,32 @@ cp "${filename}"/frp* "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR"/frp*
 cd /
 rm -rf "$temp_dir"
-log_success "安装完成"
+success "安装完成"
 ```
 
 }
 
 setup_server() {
-log_info “配置服务端…”
-printf “端口 [7000]: “; read port; port=${port:-7000}
-printf “面板端口 [7500]: “; read dash_port; dash_port=${dash_port:-7500}
-printf “用户名 [admin]: “; read user; user=${user:-admin}
-printf “密码: “; read pwd
-printf “Token: “; read token
+info “配置服务端…”
+printf “端口 [7000]: “
+read port
+port=${port:-7000}
 
 ```
+printf "面板端口 [7500]: "
+read dash_port
+dash_port=${dash_port:-7500}
+
+printf "用户名 [admin]: "
+read user
+user=${user:-admin}
+
+printf "密码: "
+read pwd
+
+printf "Token: "
+read token
+
 cat > "$CONFIG_DIR/frps.ini" <<EOF
 ```
 
@@ -95,21 +107,34 @@ EOF
 mkdir -p /var/log
 touch /var/log/frps.log
 create_service "frps"
-log_success "服务端配置完成"
+success "服务端配置完成"
 ```
 
 }
 
 setup_client() {
-log_info “配置客户端…”
-printf “服务器地址: “; read server
-printf “端口 [7000]: “; read port; port=${port:-7000}
-printf “Token: “; read token
-printf “本地端口: “; read local_port
-printf “远程端口: “; read remote_port
-printf “服务名 [ssh]: “; read name; name=${name:-ssh}
+info “配置客户端…”
+printf “服务器地址: “
+read server
 
 ```
+printf "端口 [7000]: "
+read port
+port=${port:-7000}
+
+printf "Token: "
+read token
+
+printf "本地端口: "
+read local_port
+
+printf "远程端口: "
+read remote_port
+
+printf "服务名 [ssh]: "
+read name
+name=${name:-ssh}
+
 cat > "$CONFIG_DIR/frpc.ini" <<EOF
 ```
 
@@ -132,7 +157,7 @@ EOF
 mkdir -p /var/log
 touch /var/log/frpc.log
 create_service "frpc"
-log_success "客户端配置完成"
+success "客户端配置完成"
 ```
 
 }
@@ -172,12 +197,12 @@ systemctl daemon-reload
 systemctl enable “$service”
 systemctl start “$service”
 fi
-log_success “$service 启动完成”
+success “$service 启动完成”
 }
 
 show_panel() {
 if [ ! -f “$CONFIG_DIR/frps.ini” ]; then
-log_error “未找到服务端配置”
+error “未找到服务端配置”
 return
 fi
 
@@ -276,7 +301,7 @@ if [ “$OS_TYPE” = “openwrt” ]; then
 else
 systemctl restart “$service”
 fi
-log_success “$service 重启完成”
+success “$service 重启完成”
 fi
 done
 }
@@ -326,13 +351,12 @@ done
         systemctl daemon-reload
     fi
     
-    log_success "卸载完成"
+    success "卸载完成"
 fi
 ```
 
 }
 
-main() {
 while true; do
 clear
 echo “===============================”
@@ -351,51 +375,48 @@ printf “选择: “
 read choice
 
 ```
-    case $choice in
-        1)
-            install_frp
-            setup_server
-            printf "按回车继续..."
-            read dummy
-            ;;
-        2)
-            install_frp
-            setup_client
-            printf "按回车继续..."
-            read dummy
-            ;;
-        3)
-            show_status
-            printf "按回车继续..."
-            read dummy
-            ;;
-        4)
-            restart_services
-            printf "按回车继续..."
-            read dummy
-            ;;
-        5)
-            view_logs
-            ;;
-        6)
-            uninstall
-            printf "按回车继续..."
-            read dummy
-            ;;
-        f|F)
-            show_panel
-            ;;
-        0)
-            exit 0
-            ;;
-        *)
-            echo "无效选择"
-            sleep 1
-            ;;
-    esac
-done
+case $choice in
+    1)
+        install_frp
+        setup_server
+        printf "按回车继续..."
+        read dummy
+        ;;
+    2)
+        install_frp
+        setup_client
+        printf "按回车继续..."
+        read dummy
+        ;;
+    3)
+        show_status
+        printf "按回车继续..."
+        read dummy
+        ;;
+    4)
+        restart_services
+        printf "按回车继续..."
+        read dummy
+        ;;
+    5)
+        view_logs
+        ;;
+    6)
+        uninstall
+        printf "按回车继续..."
+        read dummy
+        ;;
+    f|F)
+        show_panel
+        ;;
+    0)
+        exit 0
+        ;;
+    *)
+        echo "无效选择"
+        sleep 1
+        ;;
+esac
 ```
 
-}
-
-main
+done
