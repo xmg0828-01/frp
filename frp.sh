@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# FRP管理脚本 - 支持Linux和OpenWrt
+# FRP管理脚本 - 支持Linux、OpenWrt和macOS
 
 # 功能：安装、配置、管理FRP服务
 
@@ -27,6 +27,8 @@ FRPC_LOG=”$FRP_LOG_DIR/frpc.log”
 check_system() {
 if [ -f /etc/openwrt_release ]; then
 SYSTEM=“openwrt”
+elif [ “$(uname)” = “Darwin” ]; then
+SYSTEM=“macos”
 elif [ -f /etc/debian_version ]; then
 SYSTEM=“debian”
 elif [ -f /etc/redhat-release ]; then
@@ -40,6 +42,23 @@ fi
 
 check_arch() {
 ARCH=$(uname -m)
+if [ “$SYSTEM” = “macos” ]; then
+case $ARCH in
+x86_64)
+ARCH=“amd64”
+OS=“darwin”
+;;
+arm64)
+ARCH=“arm64”
+OS=“darwin”
+;;
+*)
+echo -e “${RED}不支持的Mac架构: $ARCH${NC}”
+exit 1
+;;
+esac
+else
+OS=“linux”
 case $ARCH in
 x86_64)
 ARCH=“amd64”
@@ -55,14 +74,21 @@ echo -e “${RED}不支持的架构: $ARCH${NC}”
 exit 1
 ;;
 esac
+fi
 }
 
 # 创建必要目录
 
 create_dirs() {
+if [ “$SYSTEM” = “macos” ]; then
+sudo mkdir -p $FRP_DIR
+sudo mkdir -p $FRP_CONFIG_DIR
+sudo mkdir -p $FRP_LOG_DIR
+else
 mkdir -p $FRP_DIR
 mkdir -p $FRP_CONFIG_DIR
 mkdir -p $FRP_LOG_DIR
+fi
 }
 
 # 下载FRP
@@ -74,7 +100,7 @@ local type=$2
 ```
 echo -e "${BLUE}正在下载FRP ${version}...${NC}"
 
-local url="https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_linux_${ARCH}.tar.gz"
+local url="https://github.com/fatedier/frp/releases/download/v${version}/frp_${version}_${OS}_${ARCH}.tar.gz"
 local temp_file="/tmp/frp_${version}.tar.gz"
 
 if command -v wget >/dev/null 2>&1; then
@@ -89,16 +115,26 @@ fi
 tar -xzf "$temp_file" -C /tmp/
 
 if [ "$type" = "server" ] || [ "$type" = "both" ]; then
-    cp "/tmp/frp_${version}_linux_${ARCH}/frps" "$FRP_DIR/"
-    chmod +x "$FRP_DIR/frps"
+    if [ "$SYSTEM" = "macos" ]; then
+        sudo cp "/tmp/frp_${version}_${OS}_${ARCH}/frps" "$FRP_DIR/"
+        sudo chmod +x "$FRP_DIR/frps"
+    else
+        cp "/tmp/frp_${version}_${OS}_${ARCH}/frps" "$FRP_DIR/"
+        chmod +x "$FRP_DIR/frps"
+    fi
 fi
 
 if [ "$type" = "client" ] || [ "$type" = "both" ]; then
-    cp "/tmp/frp_${version}_linux_${ARCH}/frpc" "$FRP_DIR/"
-    chmod +x "$FRP_DIR/frpc"
+    if [ "$SYSTEM" = "macos" ]; then
+        sudo cp "/tmp/frp_${version}_${OS}_${ARCH}/frpc" "$FRP_DIR/"
+        sudo chmod +x "$FRP_DIR/frpc"
+    else
+        cp "/tmp/frp_${version}_${OS}_${ARCH}/frpc" "$FRP_DIR/"
+        chmod +x "$FRP_DIR/frpc"
+    fi
 fi
 
-rm -rf "/tmp/frp_${version}_linux_${ARCH}" "$temp_file"
+rm -rf "/tmp/frp_${version}_${OS}_${ARCH}" "$temp_file"
 
 echo -e "${GREEN}FRP下载完成${NC}"
 ```
@@ -144,9 +180,43 @@ start
 EOF
 chmod +x “/etc/init.d/$service_name”
 /etc/init.d/$service_name enable
-else
-# Systemd服务
-cat > “/etc/systemd/system/${service_name}.service” <<EOF
+elif [ “$SYSTEM” = “macos” ]; then
+# macOS launchd plist
+local plist_file=”/Library/LaunchDaemons/com.frp.${service_name}.plist”
+sudo tee “$plist_file” > /dev/null <<EOF
+
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.frp.${service_name}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$FRP_DIR/$exec_name</string>
+        <string>-c</string>
+        <string>$config_file</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$FRP_LOG_DIR/${exec_name}.log</string>
+    <key>StandardErrorPath</key>
+    <string>$FRP_LOG_DIR/${exec_name}.log</string>
+</dict>
+</plist>
+EOF
+        echo -e "${GREEN}macOS服务创建完成${NC}"
+        echo -e "${YELLOW}使用以下命令管理服务:${NC}"
+        echo "启动: sudo launchctl load -w $plist_file"
+        echo "停止: sudo launchctl unload -w $plist_file"
+    else
+        # Systemd服务
+        cat > "/etc/systemd/system/${service_name}.service" <<EOF
 [Unit]
 Description=FRP ${service_type} Service
 After=network.target
@@ -186,7 +256,8 @@ dashboard_pwd=${dashboard_pwd:-admin}
 read -p "请输入Token [123456]: " token
 token=${token:-123456}
 
-cat > "$FRPS_CONFIG" <<EOF
+if [ "$SYSTEM" = "macos" ]; then
+    sudo tee "$FRPS_CONFIG" > /dev/null <<EOF
 ```
 
 [common]
@@ -199,6 +270,19 @@ log_file = $FRPS_LOG
 log_level = info
 log_max_days = 7
 EOF
+else
+cat > “$FRPS_CONFIG” <<EOF
+[common]
+bind_port = $bind_port
+dashboard_port = $dashboard_port
+dashboard_user = $dashboard_user
+dashboard_pwd = $dashboard_pwd
+token = $token
+log_file = $FRPS_LOG
+log_level = info
+log_max_days = 7
+EOF
+fi
 
 ```
 echo -e "${GREEN}FRP服务器配置完成${NC}"
@@ -224,7 +308,8 @@ server_port=${server_port:-7000}
 read -p "请输入Token [123456]: " token
 token=${token:-123456}
 
-cat > "$FRPC_CONFIG" <<EOF
+if [ "$SYSTEM" = "macos" ]; then
+    sudo tee "$FRPC_CONFIG" > /dev/null <<EOF
 ```
 
 [common]
@@ -256,6 +341,38 @@ log_max_days = 7
 # custom_domains = www.example.com
 
 EOF
+else
+cat > “$FRPC_CONFIG” <<EOF
+[common]
+server_addr = $server_addr
+server_port = $server_port
+token = $token
+log_file = $FRPC_LOG
+log_level = info
+log_max_days = 7
+
+# 示例配置
+
+# [ssh]
+
+# type = tcp
+
+# local_ip = 127.0.0.1
+
+# local_port = 22
+
+# remote_port = 6000
+
+# [web]
+
+# type = http
+
+# local_port = 80
+
+# custom_domains = www.example.com
+
+EOF
+fi
 
 ```
 echo -e "${GREEN}FRP客户端基础配置完成${NC}"
@@ -291,7 +408,8 @@ case $proxy_type in
         read -p "请输入本地端口: " local_port
         read -p "请输入远程端口: " remote_port
         
-        cat >> "$FRPC_CONFIG" <<EOF
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo tee -a "$FRPC_CONFIG" > /dev/null <<EOF
 ```
 
 [$rule_name]
@@ -300,6 +418,16 @@ local_ip = $local_ip
 local_port = $local_port
 remote_port = $remote_port
 EOF
+else
+cat >> “$FRPC_CONFIG” <<EOF
+
+[$rule_name]
+type = $type
+local_ip = $local_ip
+local_port = $local_port
+remote_port = $remote_port
+EOF
+fi
 ;;
 2)
 type=“http”
@@ -307,7 +435,8 @@ read -p “请输入本地端口: “ local_port
 read -p “请输入自定义域名: “ custom_domains
 
 ```
-        cat >> "$FRPC_CONFIG" <<EOF
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo tee -a "$FRPC_CONFIG" > /dev/null <<EOF
 ```
 
 [$rule_name]
@@ -315,6 +444,15 @@ type = $type
 local_port = $local_port
 custom_domains = $custom_domains
 EOF
+else
+cat >> “$FRPC_CONFIG” <<EOF
+
+[$rule_name]
+type = $type
+local_port = $local_port
+custom_domains = $custom_domains
+EOF
+fi
 ;;
 3)
 type=“https”
@@ -322,7 +460,8 @@ read -p “请输入本地端口: “ local_port
 read -p “请输入自定义域名: “ custom_domains
 
 ```
-        cat >> "$FRPC_CONFIG" <<EOF
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo tee -a "$FRPC_CONFIG" > /dev/null <<EOF
 ```
 
 [$rule_name]
@@ -330,6 +469,15 @@ type = $type
 local_port = $local_port
 custom_domains = $custom_domains
 EOF
+else
+cat >> “$FRPC_CONFIG” <<EOF
+
+[$rule_name]
+type = $type
+local_port = $local_port
+custom_domains = $custom_domains
+EOF
+fi
 ;;
 4)
 type=“udp”
@@ -339,7 +487,8 @@ read -p “请输入本地端口: “ local_port
 read -p “请输入远程端口: “ remote_port
 
 ```
-        cat >> "$FRPC_CONFIG" <<EOF
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo tee -a "$FRPC_CONFIG" > /dev/null <<EOF
 ```
 
 [$rule_name]
@@ -348,6 +497,16 @@ local_ip = $local_ip
 local_port = $local_port
 remote_port = $remote_port
 EOF
+else
+cat >> “$FRPC_CONFIG” <<EOF
+
+[$rule_name]
+type = $type
+local_ip = $local_ip
+local_port = $local_port
+remote_port = $remote_port
+EOF
+fi
 ;;
 *)
 echo -e “${RED}无效的选择${NC}”
@@ -374,6 +533,13 @@ if [ "$SYSTEM" = "openwrt" ]; then
     else
         echo -e "${RED}FRP${service} 未运行${NC}"
     fi
+elif [ "$SYSTEM" = "macos" ]; then
+    if sudo launchctl list | grep -q "com.frp.frp${service}"; then
+        echo -e "${GREEN}FRP${service} 正在运行${NC}"
+        sudo launchctl list | grep "com.frp.frp${service}"
+    else
+        echo -e "${RED}FRP${service} 未运行${NC}"
+    fi
 else
     systemctl status frp${service} --no-pager
 fi
@@ -390,7 +556,11 @@ local log_file=”$FRP_LOG_DIR/frp${service}.log”
 ```
 if [ -f "$log_file" ]; then
     echo -e "${BLUE}=== FRP${service} 日志 ===${NC}"
-    tail -n 50 "$log_file"
+    if [ "$SYSTEM" = "macos" ]; then
+        sudo tail -n 50 "$log_file"
+    else
+        tail -n 50 "$log_file"
+    fi
 else
     echo -e "${YELLOW}日志文件不存在${NC}"
 fi
@@ -406,8 +576,13 @@ echo -e “${BLUE}=== FRP管理信息 ===${NC}”
 ```
 # 检查FRPS状态
 if [ -f "$FRPS_CONFIG" ]; then
-    local dashboard_port=$(grep "dashboard_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
-    local bind_port=$(grep "bind_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    if [ "$SYSTEM" = "macos" ]; then
+        local dashboard_port=$(sudo grep "dashboard_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+        local bind_port=$(sudo grep "bind_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    else
+        local dashboard_port=$(grep "dashboard_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+        local bind_port=$(grep "bind_port" "$FRPS_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    fi
     
     echo -e "${GREEN}FRP服务器信息:${NC}"
     echo "监听端口: $bind_port"
@@ -419,6 +594,11 @@ if [ -f "$FRPS_CONFIG" ]; then
             echo -e "\n${GREEN}已连接的客户端:${NC}"
             netstat -tn 2>/dev/null | grep ":$bind_port" | grep ESTABLISHED | awk '{print $5}' | cut -d':' -f1 | sort | uniq
         fi
+    elif [ "$SYSTEM" = "macos" ]; then
+        if sudo launchctl list | grep -q "com.frp.frps"; then
+            echo -e "\n${GREEN}已连接的客户端:${NC}"
+            sudo lsof -i :$bind_port | grep ESTABLISHED | awk '{print $9}' | cut -d':' -f1 | cut -d'>' -f2 | sort | uniq
+        fi
     else
         if systemctl is-active frps >/dev/null 2>&1; then
             echo -e "\n${GREEN}已连接的客户端:${NC}"
@@ -429,15 +609,24 @@ fi
 
 # 检查FRPC状态
 if [ -f "$FRPC_CONFIG" ]; then
-    local server_addr=$(grep "server_addr" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
-    local server_port=$(grep "server_port" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    if [ "$SYSTEM" = "macos" ]; then
+        local server_addr=$(sudo grep "server_addr" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+        local server_port=$(sudo grep "server_port" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    else
+        local server_addr=$(grep "server_addr" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+        local server_port=$(grep "server_port" "$FRPC_CONFIG" | cut -d'=' -f2 | tr -d ' ')
+    fi
     
     echo -e "\n${GREEN}FRP客户端信息:${NC}"
     echo "服务器地址: $server_addr:$server_port"
     
     # 显示配置的规则
     echo -e "\n${GREEN}配置的代理规则:${NC}"
-    grep "^\[" "$FRPC_CONFIG" | grep -v "\[common\]" | tr -d '[]'
+    if [ "$SYSTEM" = "macos" ]; then
+        sudo grep "^\[" "$FRPC_CONFIG" | grep -v "\[common\]" | tr -d '[]'
+    else
+        grep "^\[" "$FRPC_CONFIG" | grep -v "\[common\]" | tr -d '[]'
+    fi
 fi
 ```
 
@@ -451,6 +640,8 @@ local service=$1
 ```
 if [ "$SYSTEM" = "openwrt" ]; then
     /etc/init.d/frp${service} start
+elif [ "$SYSTEM" = "macos" ]; then
+    sudo launchctl load -w "/Library/LaunchDaemons/com.frp.frp${service}.plist"
 else
     systemctl start frp${service}
 fi
@@ -468,6 +659,8 @@ local service=$1
 ```
 if [ "$SYSTEM" = "openwrt" ]; then
     /etc/init.d/frp${service} stop
+elif [ "$SYSTEM" = "macos" ]; then
+    sudo launchctl unload -w "/Library/LaunchDaemons/com.frp.frp${service}.plist"
 else
     systemctl stop frp${service}
 fi
@@ -485,6 +678,10 @@ local service=$1
 ```
 if [ "$SYSTEM" = "openwrt" ]; then
     /etc/init.d/frp${service} restart
+elif [ "$SYSTEM" = "macos" ]; then
+    stop_service $service
+    sleep 1
+    start_service $service
 else
     systemctl restart frp${service}
 fi
@@ -511,6 +708,11 @@ if [ "$SYSTEM" = "openwrt" ]; then
     [ -f "/etc/init.d/frps" ] && /etc/init.d/frps stop && /etc/init.d/frps disable
     [ -f "/etc/init.d/frpc" ] && /etc/init.d/frpc stop && /etc/init.d/frpc disable
     rm -f /etc/init.d/frps /etc/init.d/frpc
+elif [ "$SYSTEM" = "macos" ]; then
+    sudo launchctl unload -w "/Library/LaunchDaemons/com.frp.frps.plist" 2>/dev/null
+    sudo launchctl unload -w "/Library/LaunchDaemons/com.frp.frpc.plist" 2>/dev/null
+    sudo rm -f /Library/LaunchDaemons/com.frp.frps.plist
+    sudo rm -f /Library/LaunchDaemons/com.frp.frpc.plist
 else
     systemctl stop frps frpc 2>/dev/null
     systemctl disable frps frpc 2>/dev/null
@@ -519,9 +721,15 @@ else
 fi
 
 # 删除文件
-rm -rf $FRP_DIR
-rm -rf $FRP_CONFIG_DIR
-rm -rf $FRP_LOG_DIR
+if [ "$SYSTEM" = "macos" ]; then
+    sudo rm -rf $FRP_DIR
+    sudo rm -rf $FRP_CONFIG_DIR
+    sudo rm -rf $FRP_LOG_DIR
+else
+    rm -rf $FRP_DIR
+    rm -rf $FRP_CONFIG_DIR
+    rm -rf $FRP_LOG_DIR
+fi
 
 echo -e "${GREEN}FRP卸载完成${NC}"
 ```
@@ -633,10 +841,18 @@ case $choice in
         view_logs "c"
         ;;
     17)
-        ${EDITOR:-vi} "$FRPS_CONFIG"
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo ${EDITOR:-vi} "$FRPS_CONFIG"
+        else
+            ${EDITOR:-vi} "$FRPS_CONFIG"
+        fi
         ;;
     18)
-        ${EDITOR:-vi} "$FRPC_CONFIG"
+        if [ "$SYSTEM" = "macos" ]; then
+            sudo ${EDITOR:-vi} "$FRPC_CONFIG"
+        else
+            ${EDITOR:-vi} "$FRPC_CONFIG"
+        fi
         ;;
     19)
         uninstall_frp
@@ -664,9 +880,9 @@ main_menu
 
 check_system
 
-# 检查root权限
+# 检查权限
 
-if [ $EUID -ne 0 ]; then
+if [ “$SYSTEM” != “macos” ] && [ $EUID -ne 0 ]; then
 echo -e “${RED}此脚本需要root权限运行${NC}”
 exit 1
 fi
