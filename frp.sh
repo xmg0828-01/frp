@@ -27,7 +27,7 @@ OS_TYPE=“linux”
 fi
 
 ```
-case $(uname -m) in
+case "$(uname -m)" in
     x86_64|amd64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
     armv7l|armv6l) ARCH="arm" ;;
@@ -40,9 +40,9 @@ print_success "系统: $OS_TYPE, 架构: $ARCH"
 
 install_frp() {
 detect_system
-local filename=“frp_${FRP_VERSION}*${OS_TYPE}*${ARCH}”
-local url=“https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${filename}.tar.gz”
-local temp_dir=$(mktemp -d)
+filename=“frp_${FRP_VERSION}*${OS_TYPE}*${ARCH}”
+url=“https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${filename}.tar.gz”
+temp_dir=$(mktemp -d)
 cd “$temp_dir”
 
 ```
@@ -66,13 +66,25 @@ print_success "FRP 安装完成"
 
 setup_server() {
 print_info “配置服务端…”
-printf “端口 [7000]: “; read port; port=${port:-7000}
-printf “面板端口 [7500]: “; read dash_port; dash_port=${dash_port:-7500}
-printf “用户名 [admin]: “; read user; user=${user:-admin}
-printf “密码: “; read pwd
-printf “Token: “; read token
+printf “端口 [7000]: “
+read port
+port=${port:-7000}
 
 ```
+printf "面板端口 [7500]: "
+read dash_port
+dash_port=${dash_port:-7500}
+
+printf "用户名 [admin]: "
+read user
+user=${user:-admin}
+
+printf "密码: "
+read pwd
+
+printf "Token: "
+read token
+
 cat > "$CONFIG_DIR/frps.ini" <<EOF
 ```
 
@@ -100,14 +112,27 @@ print_success "服务端配置完成"
 
 setup_client() {
 print_info “配置客户端…”
-printf “服务器地址: “; read server
-printf “服务器端口 [7000]: “; read port; port=${port:-7000}
-printf “Token: “; read token
-printf “本地端口: “; read local_port
-printf “远程端口: “; read remote_port
-printf “服务名称 [ssh]: “; read name; name=${name:-ssh}
+printf “服务器地址: “
+read server
 
 ```
+printf "服务器端口 [7000]: "
+read port
+port=${port:-7000}
+
+printf "Token: "
+read token
+
+printf "本地端口: "
+read local_port
+
+printf "远程端口: "
+read remote_port
+
+printf "服务名称 [ssh]: "
+read name
+name=${name:-ssh}
+
 cat > "$CONFIG_DIR/frpc.ini" <<EOF
 ```
 
@@ -136,7 +161,7 @@ print_success "客户端配置完成"
 }
 
 create_service() {
-local service=$1
+service=$1
 if [ “$OS_TYPE” = “openwrt” ]; then
 cat > “/etc/init.d/$service” <<EOF
 #!/bin/sh /etc/rc.common
@@ -180,10 +205,6 @@ return
 fi
 
 ```
-local port
-local user
-local pwd
-local ip
 port=$(grep dashboard_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
 user=$(grep dashboard_user "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
 pwd=$(grep dashboard_pwd "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
@@ -209,7 +230,6 @@ if [ -f "/var/log/frps.log" ]; then
     
     echo ""
     echo "当前活跃连接:"
-    local bind_port
     bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
     netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | while read line; do
         echo "  $(echo $line | awk '{print $5}' | cut -d: -f1)"
@@ -253,7 +273,6 @@ done
 if [ -f "/var/log/frps.log" ]; then
     echo ""
     echo "当前连接的客户端IP:"
-    local bind_port
     bind_port=$(grep bind_port "$CONFIG_DIR/frps.ini" | cut -d'=' -f2 | tr -d ' ')
     netstat -tn 2>/dev/null | grep ":$bind_port.*ESTABLISHED" | while read line; do
         echo "  $(echo $line | awk '{print $5}' | cut -d: -f1)"
@@ -261,8 +280,6 @@ if [ -f "/var/log/frps.log" ]; then
     
     echo ""
     echo "今日连接统计:"
-    local today
-    local count
     today=$(date '+%Y/%m/%d')
     count=$(grep "$today" /var/log/frps.log | grep -c "login from" 2>/dev/null || echo "0")
     echo "  连接次数: $count"
@@ -341,7 +358,7 @@ fi
 
 }
 
-main_menu() {
+do_main_menu() {
 while true; do
 clear
 echo “===============================”
@@ -407,4 +424,4 @@ done
 
 }
 
-main_menu
+do_main_menu
