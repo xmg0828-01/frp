@@ -14,7 +14,7 @@ RED=’\033[0;31m’
 GREEN=’\033[0;32m’
 YELLOW=’\033[1;33m’
 BLUE=’\033[0;34m’
-NC=’\033[0m’ # No Color
+NC=’\033[0m’
 
 # 版本信息
 
@@ -34,19 +34,19 @@ DOWNLOAD_URL=””
 # 打印函数
 
 print_info() {
-echo -e “${BLUE}[INFO]${NC} $1”
+printf “${BLUE}[INFO]${NC} %s\n” “$1”
 }
 
 print_success() {
-echo -e “${GREEN}[SUCCESS]${NC} $1”
+printf “${GREEN}[SUCCESS]${NC} %s\n” “$1”
 }
 
 print_warning() {
-echo -e “${YELLOW}[WARNING]${NC} $1”
+printf “${YELLOW}[WARNING]${NC} %s\n” “$1”
 }
 
 print_error() {
-echo -e “${RED}[ERROR]${NC} $1”
+printf “${RED}[ERROR]${NC} %s\n” “$1”
 }
 
 # 检测系统类型和架构
